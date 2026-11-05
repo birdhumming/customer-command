@@ -1,4 +1,4 @@
-# Relay - Customer Command Center
+# Customer Command Center
 
 A working full-stack demo for a small team selling AI-agent evaluation and improvement services.
 
