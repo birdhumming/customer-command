@@ -1,25 +1,68 @@
-const assert=require('node:assert/strict');
-const {seedAccounts}=require(process.env.TEST_BUILD+'/seed.js');
-const {getSignals,getGaps,reviewCurrent}=require(process.env.TEST_BUILD+'/rules.js');
-const today='2026-11-04';
-const [northstar,atlas,harbor,meridian,cedar]=seedAccounts(today);
-assert(getGaps(northstar,'Proposal').some(g=>g.includes('data')));
-assert(getSignals(atlas,today).some(s=>s.key==='data-conflict'));
+const assert = require('node:assert/strict');
+const { seedAccounts } = require(process.env.TEST_BUILD + '/seed.js');
+const { getSignals, getGaps, reviewCurrent } = require(process.env.TEST_BUILD + '/rules.js');
+const today = '2026-11-04';
+const [northstar, atlas, harbor, meridian, cedar] = seedAccounts(today);
+assert(getGaps(northstar, 'Proposal').some((g) => g.includes('data')));
+assert(getSignals(atlas, today).some((s) => s.key === 'data-conflict'));
 assert(!reviewCurrent(atlas));
-assert.equal(getGaps(harbor,'Delivery').length,0);
-assert(getSignals(meridian,today).some(s=>s.key==='renewal-risk'));
-assert(getSignals(meridian,today).some(s=>s.key==='delivery-risk'));
-assert(!getSignals(cedar,today).some(s=>s.severity==='critical'||s.severity==='high'));
-const original=structuredClone(harbor.agreement);harbor.proposal.scope='New proposal';harbor.proposal.revision++;
-assert.deepEqual(harbor.agreement,original);assert(!reviewCurrent(harbor));
-const clean=structuredClone(cedar);clean.contact='Updated contact';assert(reviewCurrent(clean));
-meridian.tasks.forEach(t=>t.done=true);meridian.blockers.forEach(b=>b.resolved=true);
-assert(!getSignals(meridian,today).some(s=>s.key==='overdue'||s.key==='delivery-risk'));
-meridian.proposal.latest=0;assert(getSignals(meridian,today).find(s=>s.key==='renewal-risk').reason.includes('below'));
-meridian.proposal.comparisonValid=false;assert(getSignals(meridian,today).find(s=>s.key==='renewal-risk').reason.includes('not been measured'));
-meridian.stage='Ended';assert.equal(getSignals(meridian,today).length,0);
+assert.equal(getGaps(harbor, 'Delivery').length, 0);
+assert(getSignals(meridian, today).some((s) => s.key === 'renewal-risk'));
+assert(getSignals(meridian, today).some((s) => s.key === 'delivery-risk'));
+assert(!getSignals(cedar, today).some((s) => s.severity === 'critical' || s.severity === 'high'));
+const original = structuredClone(harbor.agreement);
+harbor.proposal.scope = 'New proposal';
+harbor.proposal.revision++;
+assert.deepEqual(harbor.agreement, original);
+assert(!reviewCurrent(harbor));
+const clean = structuredClone(cedar);
+clean.contact = 'Updated contact';
+assert(reviewCurrent(clean));
+meridian.tasks.forEach((t) => (t.done = true));
+meridian.blockers.forEach((b) => (b.resolved = true));
+assert(!getSignals(meridian, today).some((s) => s.key === 'overdue' || s.key === 'delivery-risk'));
+meridian.proposal.latest = 0;
+assert(
+  getSignals(meridian, today)
+    .find((s) => s.key === 'renewal-risk')
+    .reason.includes('below'),
+);
+meridian.proposal.comparisonValid = false;
+assert(
+  getSignals(meridian, today)
+    .find((s) => s.key === 'renewal-risk')
+    .reason.includes('not been measured'),
+);
+meridian.stage = 'Ended';
+assert.equal(getSignals(meridian, today).length, 0);
 console.log('12 workflow rule assertions passed');
-const {dataUnknown,dataConflicts,reconcileRiskTasks}=require(process.env.TEST_BUILD+'/rules.js');
-const permissions=structuredClone(cedar);permissions.restrictions.status='none';permissions.restrictions.externalAllowed='unknown';permissions.restrictions.trainingAllowed='unknown';permissions.proposal.trainingUse=true;assert(dataUnknown(permissions));permissions.restrictions.trainingAllowed='yes';assert(!dataUnknown(permissions));permissions.proposal.externalProcessing=true;assert(dataUnknown(permissions));permissions.restrictions.externalAllowed='yes';assert(!dataUnknown(permissions));permissions.restrictions.trainingAllowed='no';assert(dataConflicts(permissions).length>0);
-const risks=seedAccounts(today)[3];reconcileRiskTasks(risks,today);reconcileRiskTasks(risks,today);assert.equal(risks.tasks.filter(t=>t.automationKey==='risk:delivery-risk').length,1);assert.equal(risks.tasks.filter(t=>t.automationKey==='risk:renewal-risk').length,1);risks.blockers.forEach(b=>b.resolved=true);reconcileRiskTasks(risks,today);assert(risks.tasks.find(t=>t.automationKey==='risk:delivery-risk').done);risks.blockers[0].resolved=false;reconcileRiskTasks(risks,today);assert(!risks.tasks.find(t=>t.automationKey==='risk:delivery-risk').done);assert.equal(risks.tasks.filter(t=>t.automationKey==='risk:delivery-risk').length,1);
+const { dataUnknown, dataConflicts, reconcileRiskTasks } = require(
+  process.env.TEST_BUILD + '/rules.js',
+);
+const permissions = structuredClone(cedar);
+permissions.restrictions.status = 'none';
+permissions.restrictions.externalAllowed = 'unknown';
+permissions.restrictions.trainingAllowed = 'unknown';
+permissions.proposal.trainingUse = true;
+assert(dataUnknown(permissions));
+permissions.restrictions.trainingAllowed = 'yes';
+assert(!dataUnknown(permissions));
+permissions.proposal.externalProcessing = true;
+assert(dataUnknown(permissions));
+permissions.restrictions.externalAllowed = 'yes';
+assert(!dataUnknown(permissions));
+permissions.restrictions.trainingAllowed = 'no';
+assert(dataConflicts(permissions).length > 0);
+const risks = seedAccounts(today)[3];
+reconcileRiskTasks(risks, today);
+reconcileRiskTasks(risks, today);
+assert.equal(risks.tasks.filter((t) => t.automationKey === 'risk:delivery-risk').length, 1);
+assert.equal(risks.tasks.filter((t) => t.automationKey === 'risk:renewal-risk').length, 1);
+risks.blockers.forEach((b) => (b.resolved = true));
+reconcileRiskTasks(risks, today);
+assert(risks.tasks.find((t) => t.automationKey === 'risk:delivery-risk').done);
+risks.blockers[0].resolved = false;
+reconcileRiskTasks(risks, today);
+assert(!risks.tasks.find((t) => t.automationKey === 'risk:delivery-risk').done);
+assert.equal(risks.tasks.filter((t) => t.automationKey === 'risk:delivery-risk').length, 1);
 console.log('Permission and risk-task lifecycle assertions passed');

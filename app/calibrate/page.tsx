@@ -1,33 +1,749 @@
 'use client';
-import {useEffect,useState,useRef} from 'react';
-import {ArrowLeft,ArrowRight,Check,ShieldCheck,AlertTriangle,RefreshCw} from 'lucide-react';
-import {emptyCalibration,gradingExamples,graderJudgments,validateCalibration,type Calibration} from '@/lib/grading';
-type Account={stage?:string;id:string;name:string;industry:string;ownerId:string;technicalOwnerId:string;grading:Calibration;tasks:{title:string;ownerId:string;done:boolean;automationKey?:string}[];version:number};
-type User={id:string;name:string;role:string};
-const steps=['Task','Expert examples','Compare judgments','Discovery brief','Engineer review'];
-export default function Calibrate(){const [a,setA]=useState<Account|null>(null),[users,setUsers]=useState<User[]>([]),[actor,setActor]=useState('maya'),[step,setStep]=useState(0),[c,setC]=useState<Calibration>(emptyCalibration()),[busy,setBusy]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(''),[dirty,setDirty]=useState(false);const errorRef=useRef<HTMLDivElement>(null);const id=typeof window!=='undefined'?new URLSearchParams(location.search).get('account'):null;
- async function load(keepDraft=false){if(!id){setError('Choose an account from its account page.');return;}try{const r=await fetch('/api/calibration?accountId='+encodeURIComponent(id),{cache:'no-store'});const d:any=await r.json();if(!r.ok)throw Error(d.error);setA(d.account);if(!keepDraft){setC(d.account.grading);setDirty(false);}else{setSaved('Latest account loaded. Your draft is preserved; review it before saving again.');setError('');}setUsers(d.users);const storedActor=localStorage.getItem('relay:teammate');setActor(d.users.some((u:User)=>u.id===storedActor)?storedActor:(d.users.some((u:User)=>u.id===actor)?actor:(d.users[0]?.id||'')));const n=Number(new URLSearchParams(location.search).get('step')??localStorage.getItem('grading-step:'+id));if(Number.isInteger(n)&&n>=0&&n<=4)setStep(n);}catch(e:any){setError(e.message)}}
- useEffect(()=>{load()},[]);
- useEffect(()=>{if(error)errorRef.current?.scrollIntoView({block:"center",behavior:"smooth"})},[error]);
- useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[dirty]);
- function change(key:keyof Calibration,value:any){setC(v=>({...v,[key]:value}));setSaved('');setDirty(true);}
- async function save(nextStep?:number,complete=false){if(!a)return false;if(['Lost','Ended'].includes(a.stage||'')){setError('This account is closed. Reopen it in the account workspace before editing.');return false;}if(nextStep!==undefined&&nextStep>step&&!complete){const problems=step===0?[!c.task.trim()?'Describe the task.':'',!c.outcome.trim()?'Describe a good outcome.':'',!c.expertName.trim()?'Name the customer expert.':''].filter(Boolean):step===1&&c.examples.some(x=>!x.label||!x.reason.trim())?['Choose a judgment and add a reason for each example.']:step===2&&c.judgments.some(x=>!x.agreement||(x.agreement==='disagree'&&!x.correction.trim()))?['Review both judgments and explain each disagreement.']:[];if(problems.length){setError(problems.join(' '));return false;}}setBusy(true);setError('');try{const r=await fetch('/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'save',accountId:a.id,version:a.version,actorId:actor,calibration:c,complete})});const d:any=await r.json();if(!r.ok)throw Error(d.error);setA({...a,...d.account,grading:d.account.grading});setC(d.account.grading);setDirty(false);if(complete&&d.account.grading.review?.status==='open'){setStep(4);localStorage.setItem('grading-step:'+a.id,'4');}else if(nextStep!==undefined){setStep(nextStep);localStorage.setItem('grading-step:'+a.id,String(nextStep));}setSaved('Saved to the shared account record.');return true;}catch(e:any){setError(e.message);return false}finally{setBusy(false)}}
- async function requestZdr(){if(!a)return;setBusy(true);setError('');try{const r=await fetch('/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'request-zdr',accountId:a.id,version:a.version,actorId:actor})});const d:any=await r.json();if(!r.ok)throw Error(d.error);setA({...a,...d.account});setSaved('Data review task assigned.');}catch(e:any){setError(e.message)}finally{setBusy(false)}}
- async function resolve(decision:string,note:string){if(!a)return;setBusy(true);setError('');try{const r=await fetch('/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'resolve-review',accountId:a.id,version:a.version,actorId:actor,decision,note})});const d:any=await r.json();if(!r.ok)throw Error(d.error);setA({...a,...d.account});setC(d.account.grading);setSaved('Review decision saved.');}catch(e:any){setError(e.message)}finally{setBusy(false)}}
- if(!a)return <div className="grading-shell"><p>{error||'Loading discovery exercise…'}</p></div>;
- const gaps=validateCalibration(c);const firstIncomplete=!c.task.trim()||!c.outcome.trim()||!c.expertName.trim()?0:c.examples.some(x=>!x.label||!x.reason.trim())?1:c.judgments.some(x=>!x.agreement||(x.agreement==='disagree'&&!x.correction.trim()))?2:3;const dataReviewOpen=a.tasks.some(t=>!t.done&&['grading:zdr-review','grading:data-restrictions'].includes(t.automationKey||''));const person=(id:string)=>users.find(u=>u.id===id)?.name||'Unassigned';
- return <main className="grading-shell"><a className="grading-back" href={'/?account='+encodeURIComponent(a.id)+'&tab=grading'}><ArrowLeft size={15}/> Account workspace</a>
- <header className="grading-header"><div><div className="eyebrow">Discovery / grading</div><h1>Continual grading</h1><p>{a.name} · {a.industry||'Customer account'}</p></div><label className="grading-actor">Demo teammate<select value={actor} onChange={e=>{setActor(e.target.value);localStorage.setItem('relay:teammate',e.target.value)}}>{users.map(u=><option key={u.id} value={u.id}>{u.name} · {u.role}</option>)}</select></label></header>
- <p className="grading-intro">Define what good looks like, compare expert feedback with sample judgments, and save a brief for engineering.</p>
- <p className="muted grading-demo-note">Demo: fixed fictional examples and simulated judgments. Your feedback saves to the account; no model or Trajectory API is connected.</p>
- <nav className="grading-steps" aria-label="Discovery steps">{steps.map((label,i)=><button key={label} className={step===i?'active':''} aria-current={step===i?'step':undefined} disabled={busy||(i===4?!c.review:i>firstIncomplete)} title={i===4&&!c.review?'An engineering review is created after you save a brief with disagreements.':undefined} onClick={()=>{setStep(i);localStorage.setItem('grading-step:'+a.id,String(i))}}><span>{i+1}</span>{label}</button>)}</nav>
- <div className="grading-save-status"><span>{dirty?'Unsaved changes':saved||'Changes save when you continue or save a draft.'}</span><button className="text-btn" disabled={busy||!dirty||['Lost','Ended'].includes(a.stage||'')} onClick={()=>save()}>Save draft</button></div>
- {error&&<div ref={errorRef} className="error" role="alert">{error}<button onClick={()=>load(true)}>Load latest, keep draft</button></div>}
- {step===0&&<section className="panel grading-panel"><div className="section-header"><h2>1. Define the task</h2></div><div className="grading-body"><p className="muted">Start with the work and customer outcome the expert will judge.</p><label className="field"><span>What task should be graded?</span><textarea maxLength={4000} value={c.task} onChange={e=>change('task',e.target.value)} placeholder="For example, support replies to billing questions"/></label><label className="field"><span>What should a good answer achieve?</span><textarea maxLength={4000} value={c.outcome} onChange={e=>change('outcome',e.target.value)} placeholder="Describe the customer-visible result and important constraints"/></label><label className="field"><span>Customer expert</span><input maxLength={120} value={c.expertName} onChange={e=>change('expertName',e.target.value)} placeholder="Name the person who knows this work"/></label><label className="field"><span>Known data restrictions (optional)</span><textarea maxLength={4000} value={c.dataRestrictions} onChange={e=>change('dataRestrictions',e.target.value)} placeholder="Record restrictions already stated by the customer"/></label><p className="muted">Name the expert before continuing. You can save an unfinished draft at any time.</p></div><footer className="grading-footer"><span>Progress saves to this account.</span><button className="primary" disabled={busy} onClick={()=>save(1)}>Save and continue <ArrowRight size={15}/></button></footer></section>}
- {step===1&&<section className="panel grading-panel"><div className="section-header"><h2>2. Add the expert’s examples</h2></div><div className="grading-body"><p className="muted">Use these fixed examples to record the expert’s pass or fail judgment and reason.</p><details className="grading-data-note"><summary>Need customer data later?</summary><p>This demo uses only fixed examples. Create a follow-up for {person(a.technicalOwnerId||a.ownerId)} to review customer-data requirements. This saves a task; it does not enable uploads or grant permission.</p><button className="secondary" disabled={busy||dataReviewOpen} onClick={requestZdr}>{dataReviewOpen?'Data review already requested':'Create data-review task'}</button></details>{gradingExamples.map((ex,i)=><article className="grading-example" key={ex.id}><span className="eyebrow">EXAMPLE {i+1}</span><h3>{ex.prompt}</h3><blockquote>{ex.output}</blockquote><div className="grading-row"><label className="field"><span>Expert judgment</span><select value={c.examples[i]?.label||''} onChange={e=>change('examples',c.examples.map((x,j)=>j===i?{...x,label:e.target.value as any}:x))}><option value="">Choose</option><option value="pass">Pass</option><option value="fail">Fail</option></select></label><label className="field"><span>Why?</span><input maxLength={240} value={c.examples[i]?.reason||''} onChange={e=>change('examples',c.examples.map((x,j)=>j===i?{...x,reason:e.target.value}:x))} placeholder="How does it meet or miss the outcome?"/></label></div></article>)}</div><footer className="grading-footer"><button className="secondary" onClick={()=>setStep(0)}>Back</button><button className="primary" disabled={busy} onClick={()=>save(2)}>Save and continue <ArrowRight size={15}/></button></footer></section>}
- {step===2&&<section className="panel grading-panel"><div className="section-header"><h2>3. Compare judgments</h2></div><div className="grading-body"><p className="muted">These fixed simulated judgments show where an automated rubric might differ. Record the expert’s view.</p>{graderJudgments.map((g,i)=><article className="grading-example" key={g.id}><span className="eyebrow">Simulated grader judgment {i+1}</span><h3>{g.criterion} <span className="badge neutral">Sample grader: {g.judgment}</span></h3><blockquote>{g.output}</blockquote><div className="grading-row"><label className="field"><span>Does the expert agree?</span><select value={c.judgments[i]?.agreement||''} onChange={e=>change('judgments',c.judgments.map((x,j)=>j===i?{...x,agreement:e.target.value as any}:x))}><option value="">Choose</option><option value="agree">Agree</option><option value="disagree">Disagree</option></select></label>{c.judgments[i]?.agreement==='disagree'&&<label className="field"><span>What should change?</span><input maxLength={240} value={c.judgments[i]?.correction||''} onChange={e=>change('judgments',c.judgments.map((x,j)=>j===i?{...x,correction:e.target.value}:x))} placeholder="Correct judgment and reason"/></label>}</div></article>)}</div><footer className="grading-footer"><button className="secondary" onClick={()=>setStep(1)}>Back</button><button className="primary" disabled={busy} onClick={()=>save(3)}>Save and continue <ArrowRight size={15}/></button></footer></section>}
- {step===3&&<section className="panel grading-panel"><div className="section-header"><h2>4. Discovery brief</h2></div><div className="grading-body">{c.snapshot&&c.snapshot.revision!==c.revision&&<p className="error">The saved brief is out of date. Save completion again to update it.</p>}<p className="muted">Check the evidence before saving. Completion records the expert’s feedback and a follow-up where needed.</p><div className="readiness"><h3>{gaps.length?'Still needed':'Ready to save'}</h3>{gaps.length?gaps.map(x=><p key={x}><AlertTriangle size={14}/><span>{x}</span><button className="text-btn" onClick={()=>setStep(/examples/.test(x)?1:/judgments/.test(x)?2:0)}>Complete step</button></p>):<p><Check size={14}/>Task, examples, and judgments are complete.</p>}</div><dl className="grading-summary"><div><dt>Task</dt><dd>{c.task||'Not defined'}</dd></div><div><dt>Desired outcome</dt><dd>{c.outcome||'Not defined'}</dd></div><div><dt>Customer expert</dt><dd>{c.expertName||'Unidentified'}</dd></div><div><dt>Expert examples</dt><dd>{c.examples.filter(x=>x.label).length} of 3 judged</dd></div><div><dt>Disagreements</dt><dd>{c.judgments.filter(x=>x.agreement==='disagree').length} of 2</dd></div><div><dt>Needs follow-up</dt><dd>{[...(!c.expertName?['Name an expert']:[]),...(a.tasks.some(t=>!t.done&&['grading:zdr-review','grading:data-restrictions'].includes(t.automationKey||''))?['Data review']:[]),...(c.review?.status==='open'?['Engineering review']:[])].join(' · ')||'None recorded'}</dd></div><div><dt>Next step</dt><dd>{c.review?.status==='open'?'Assigned engineer reviews the disagreement':'Follow up with the named expert'}</dd></div></dl><p className="muted">This brief documents discovery. It does not qualify the account or change its lifecycle stage.</p></div><footer className="grading-footer"><button className="secondary" onClick={()=>setStep(2)}>Back</button><button className="primary" disabled={busy||!!gaps.length} onClick={async()=>{if(await save(3,true))setSaved('Discovery brief saved to the shared account record.')}}>Save discovery brief <Check size={15}/></button></footer></section>}
- {step===4&&<section className="panel grading-panel"><div className="section-header"><h2>5. Engineering review</h2><span className="caption">Assigned to {person(a.grading.review?.reviewerId||a.technicalOwnerId||a.ownerId)}</span></div><div className="grading-body">{a.grading.review?.status==='open'&&<div className="review-evidence"><h3>Disagreements to resolve</h3>{c.judgments.filter(j=>j.agreement==='disagree').map(j=><div key={j.id}><strong>{graderJudgments.find(g=>g.id===j.id)?.criterion}</strong><p>{j.correction}</p></div>)}</div>}{a.grading.review?.status==='open'?<ReviewForm actor={actor} reviewerId={a.grading.review.reviewerId} reviewerName={person(a.grading.review.reviewerId)} busy={busy} onResolve={resolve}/>:<div className="readiness"><h3>{a.grading.review?.status==='resolved'?'Review resolved':'No review assigned'}</h3><p>{a.grading.review?.decision||'A disagreement after completing the brief assigns an engineering review.'} {a.grading.review?.note}</p></div>}<a className="grading-back" href={'/?account='+encodeURIComponent(a.id)+'&tab=scope'}>Open data and scope review</a><p className="subtle-note"><ShieldCheck size={15}/>Only the assigned reviewer can record a decision. Updated evidence reopens a resolved review.</p></div><footer className="grading-footer"><button className="secondary" onClick={()=>setStep(3)}>Back to brief</button><button className="secondary" disabled={dirty||busy} onClick={()=>load()}><RefreshCw size={14}/>Refresh</button></footer></section>}
- <p className="grading-privacy">Teammate selection is a demo identity, not authentication.</p><a className="grading-back" href="/">Return to workspace</a></main>
+import { useEffect, useState, useRef } from 'react';
+import { ArrowLeft, ArrowRight, Check, ShieldCheck, AlertTriangle, RefreshCw } from 'lucide-react';
+import {
+  emptyCalibration,
+  gradingExamples,
+  graderJudgments,
+  validateCalibration,
+  type Calibration,
+} from '@/lib/grading';
+type Account = {
+  stage?: string;
+  id: string;
+  name: string;
+  industry: string;
+  ownerId: string;
+  technicalOwnerId: string;
+  grading: Calibration;
+  tasks: { title: string; ownerId: string; done: boolean; automationKey?: string }[];
+  version: number;
+};
+type User = { id: string; name: string; role: string };
+const steps = [
+  'Task',
+  'Expert examples',
+  'Compare judgments',
+  'Discovery brief',
+  'Engineer review',
+];
+export default function Calibrate() {
+  const [a, setA] = useState<Account | null>(null),
+    [users, setUsers] = useState<User[]>([]),
+    [actor, setActor] = useState('maya'),
+    [step, setStep] = useState(0),
+    [c, setC] = useState<Calibration>(emptyCalibration()),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(''),
+    [saved, setSaved] = useState(''),
+    [dirty, setDirty] = useState(false);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const id =
+    typeof window !== 'undefined' ? new URLSearchParams(location.search).get('account') : null;
+  async function load(keepDraft = false) {
+    if (!id) {
+      setError('Choose an account from its account page.');
+      return;
+    }
+    try {
+      const r = await fetch('/api/calibration?accountId=' + encodeURIComponent(id), {
+        cache: 'no-store',
+      });
+      const d: any = await r.json();
+      if (!r.ok) throw Error(d.error);
+      setA(d.account);
+      if (!keepDraft) {
+        setC(d.account.grading);
+        setDirty(false);
+      } else {
+        setSaved('Latest account loaded. Your draft is preserved; review it before saving again.');
+        setError('');
+      }
+      setUsers(d.users);
+      const storedActor = localStorage.getItem('relay:teammate');
+      setActor(
+        d.users.some((u: User) => u.id === storedActor)
+          ? storedActor
+          : d.users.some((u: User) => u.id === actor)
+            ? actor
+            : d.users[0]?.id || '',
+      );
+      const n = Number(
+        new URLSearchParams(location.search).get('step') ??
+          localStorage.getItem('grading-step:' + id),
+      );
+      if (Number.isInteger(n) && n >= 0 && n <= 4) setStep(n);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+  useEffect(() => {
+    load();
+  }, []);
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [error]);
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (dirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+  function change(key: keyof Calibration, value: any) {
+    setC((v) => ({ ...v, [key]: value }));
+    setSaved('');
+    setDirty(true);
+  }
+  async function save(nextStep?: number, complete = false) {
+    if (!a) return false;
+    if (['Lost', 'Ended'].includes(a.stage || '')) {
+      setError('This account is closed. Reopen it in the account workspace before editing.');
+      return false;
+    }
+    if (nextStep !== undefined && nextStep > step && !complete) {
+      const problems =
+        step === 0
+          ? [
+              !c.task.trim() ? 'Describe the task.' : '',
+              !c.outcome.trim() ? 'Describe a good outcome.' : '',
+              !c.expertName.trim() ? 'Name the customer expert.' : '',
+            ].filter(Boolean)
+          : step === 1 && c.examples.some((x) => !x.label || !x.reason.trim())
+            ? ['Choose a judgment and add a reason for each example.']
+            : step === 2 &&
+                c.judgments.some(
+                  (x) => !x.agreement || (x.agreement === 'disagree' && !x.correction.trim()),
+                )
+              ? ['Review both judgments and explain each disagreement.']
+              : [];
+      if (problems.length) {
+        setError(problems.join(' '));
+        return false;
+      }
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const r = await fetch('/api/calibration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save',
+          accountId: a.id,
+          version: a.version,
+          actorId: actor,
+          calibration: c,
+          complete,
+        }),
+      });
+      const d: any = await r.json();
+      if (!r.ok) throw Error(d.error);
+      setA({ ...a, ...d.account, grading: d.account.grading });
+      setC(d.account.grading);
+      setDirty(false);
+      if (complete && d.account.grading.review?.status === 'open') {
+        setStep(4);
+        localStorage.setItem('grading-step:' + a.id, '4');
+      } else if (nextStep !== undefined) {
+        setStep(nextStep);
+        localStorage.setItem('grading-step:' + a.id, String(nextStep));
+      }
+      setSaved('Saved to the shared account record.');
+      return true;
+    } catch (e: any) {
+      setError(e.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function requestZdr() {
+    if (!a) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await fetch('/api/calibration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'request-zdr',
+          accountId: a.id,
+          version: a.version,
+          actorId: actor,
+        }),
+      });
+      const d: any = await r.json();
+      if (!r.ok) throw Error(d.error);
+      setA({ ...a, ...d.account });
+      setSaved('Data review task assigned.');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function resolve(decision: string, note: string) {
+    if (!a) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await fetch('/api/calibration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'resolve-review',
+          accountId: a.id,
+          version: a.version,
+          actorId: actor,
+          decision,
+          note,
+        }),
+      });
+      const d: any = await r.json();
+      if (!r.ok) throw Error(d.error);
+      setA({ ...a, ...d.account });
+      setC(d.account.grading);
+      setSaved('Review decision saved.');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!a)
+    return (
+      <div className="grading-shell">
+        <p>{error || 'Loading discovery exercise…'}</p>
+      </div>
+    );
+  const gaps = validateCalibration(c);
+  const firstIncomplete =
+    !c.task.trim() || !c.outcome.trim() || !c.expertName.trim()
+      ? 0
+      : c.examples.some((x) => !x.label || !x.reason.trim())
+        ? 1
+        : c.judgments.some(
+              (x) => !x.agreement || (x.agreement === 'disagree' && !x.correction.trim()),
+            )
+          ? 2
+          : 3;
+  const dataReviewOpen = a.tasks.some(
+    (t) =>
+      !t.done &&
+      ['grading:zdr-review', 'grading:data-restrictions'].includes(t.automationKey || ''),
+  );
+  const person = (id: string) => users.find((u) => u.id === id)?.name || 'Unassigned';
+  return (
+    <main className="grading-shell">
+      <a className="grading-back" href={'/?account=' + encodeURIComponent(a.id) + '&tab=grading'}>
+        <ArrowLeft size={15} /> Account workspace
+      </a>
+      <header className="grading-header">
+        <div>
+          <div className="eyebrow">Discovery / grading</div>
+          <h1>Continual grading</h1>
+          <p>
+            {a.name} · {a.industry || 'Customer account'}
+          </p>
+        </div>
+        <label className="grading-actor">
+          Demo teammate
+          <select
+            value={actor}
+            onChange={(e) => {
+              setActor(e.target.value);
+              localStorage.setItem('relay:teammate', e.target.value);
+            }}
+          >
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name} · {u.role}
+              </option>
+            ))}
+          </select>
+        </label>
+      </header>
+      <p className="grading-intro">
+        Define what good looks like, compare expert feedback with sample judgments, and save a brief
+        for engineering.
+      </p>
+      <p className="muted grading-demo-note">
+        Demo: fixed fictional examples and simulated judgments. Your feedback saves to the account;
+        no model or Trajectory API is connected.
+      </p>
+      <nav className="grading-steps" aria-label="Discovery steps">
+        {steps.map((label, i) => (
+          <button
+            key={label}
+            className={step === i ? 'active' : ''}
+            aria-current={step === i ? 'step' : undefined}
+            disabled={busy || (i === 4 ? !c.review : i > firstIncomplete)}
+            title={
+              i === 4 && !c.review
+                ? 'An engineering review is created after you save a brief with disagreements.'
+                : undefined
+            }
+            onClick={() => {
+              setStep(i);
+              localStorage.setItem('grading-step:' + a.id, String(i));
+            }}
+          >
+            <span>{i + 1}</span>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="grading-save-status">
+        <span>
+          {dirty ? 'Unsaved changes' : saved || 'Changes save when you continue or save a draft.'}
+        </span>
+        <button
+          className="text-btn"
+          disabled={busy || !dirty || ['Lost', 'Ended'].includes(a.stage || '')}
+          onClick={() => save()}
+        >
+          Save draft
+        </button>
+      </div>
+      {error && (
+        <div ref={errorRef} className="error" role="alert">
+          {error}
+          <button onClick={() => load(true)}>Load latest, keep draft</button>
+        </div>
+      )}
+      {step === 0 && (
+        <section className="panel grading-panel">
+          <div className="section-header">
+            <h2>1. Define the task</h2>
+          </div>
+          <div className="grading-body">
+            <p className="muted">Start with the work and customer outcome the expert will judge.</p>
+            <label className="field">
+              <span>What task should be graded?</span>
+              <textarea
+                maxLength={4000}
+                value={c.task}
+                onChange={(e) => change('task', e.target.value)}
+                placeholder="For example, support replies to billing questions"
+              />
+            </label>
+            <label className="field">
+              <span>What should a good answer achieve?</span>
+              <textarea
+                maxLength={4000}
+                value={c.outcome}
+                onChange={(e) => change('outcome', e.target.value)}
+                placeholder="Describe the customer-visible result and important constraints"
+              />
+            </label>
+            <label className="field">
+              <span>Customer expert</span>
+              <input
+                maxLength={120}
+                value={c.expertName}
+                onChange={(e) => change('expertName', e.target.value)}
+                placeholder="Name the person who knows this work"
+              />
+            </label>
+            <label className="field">
+              <span>Known data restrictions (optional)</span>
+              <textarea
+                maxLength={4000}
+                value={c.dataRestrictions}
+                onChange={(e) => change('dataRestrictions', e.target.value)}
+                placeholder="Record restrictions already stated by the customer"
+              />
+            </label>
+            <p className="muted">
+              Name the expert before continuing. You can save an unfinished draft at any time.
+            </p>
+          </div>
+          <footer className="grading-footer">
+            <span>Progress saves to this account.</span>
+            <button className="primary" disabled={busy} onClick={() => save(1)}>
+              Save and continue <ArrowRight size={15} />
+            </button>
+          </footer>
+        </section>
+      )}
+      {step === 1 && (
+        <section className="panel grading-panel">
+          <div className="section-header">
+            <h2>2. Add the expert’s examples</h2>
+          </div>
+          <div className="grading-body">
+            <p className="muted">
+              Use these fixed examples to record the expert’s pass or fail judgment and reason.
+            </p>
+            <details className="grading-data-note">
+              <summary>Need customer data later?</summary>
+              <p>
+                This demo uses only fixed examples. Create a follow-up for{' '}
+                {person(a.technicalOwnerId || a.ownerId)} to review customer-data requirements. This
+                saves a task; it does not enable uploads or grant permission.
+              </p>
+              <button className="secondary" disabled={busy || dataReviewOpen} onClick={requestZdr}>
+                {dataReviewOpen ? 'Data review already requested' : 'Create data-review task'}
+              </button>
+            </details>
+            {gradingExamples.map((ex, i) => (
+              <article className="grading-example" key={ex.id}>
+                <span className="eyebrow">EXAMPLE {i + 1}</span>
+                <h3>{ex.prompt}</h3>
+                <blockquote>{ex.output}</blockquote>
+                <div className="grading-row">
+                  <label className="field">
+                    <span>Expert judgment</span>
+                    <select
+                      value={c.examples[i]?.label || ''}
+                      onChange={(e) =>
+                        change(
+                          'examples',
+                          c.examples.map((x, j) =>
+                            j === i ? { ...x, label: e.target.value as any } : x,
+                          ),
+                        )
+                      }
+                    >
+                      <option value="">Choose</option>
+                      <option value="pass">Pass</option>
+                      <option value="fail">Fail</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Why?</span>
+                    <input
+                      maxLength={240}
+                      value={c.examples[i]?.reason || ''}
+                      onChange={(e) =>
+                        change(
+                          'examples',
+                          c.examples.map((x, j) =>
+                            j === i ? { ...x, reason: e.target.value } : x,
+                          ),
+                        )
+                      }
+                      placeholder="How does it meet or miss the outcome?"
+                    />
+                  </label>
+                </div>
+              </article>
+            ))}
+          </div>
+          <footer className="grading-footer">
+            <button className="secondary" onClick={() => setStep(0)}>
+              Back
+            </button>
+            <button className="primary" disabled={busy} onClick={() => save(2)}>
+              Save and continue <ArrowRight size={15} />
+            </button>
+          </footer>
+        </section>
+      )}
+      {step === 2 && (
+        <section className="panel grading-panel">
+          <div className="section-header">
+            <h2>3. Compare judgments</h2>
+          </div>
+          <div className="grading-body">
+            <p className="muted">
+              These fixed simulated judgments show where an automated rubric might differ. Record
+              the expert’s view.
+            </p>
+            {graderJudgments.map((g, i) => (
+              <article className="grading-example" key={g.id}>
+                <span className="eyebrow">Simulated grader judgment {i + 1}</span>
+                <h3>
+                  {g.criterion} <span className="badge neutral">Sample grader: {g.judgment}</span>
+                </h3>
+                <blockquote>{g.output}</blockquote>
+                <div className="grading-row">
+                  <label className="field">
+                    <span>Does the expert agree?</span>
+                    <select
+                      value={c.judgments[i]?.agreement || ''}
+                      onChange={(e) =>
+                        change(
+                          'judgments',
+                          c.judgments.map((x, j) =>
+                            j === i ? { ...x, agreement: e.target.value as any } : x,
+                          ),
+                        )
+                      }
+                    >
+                      <option value="">Choose</option>
+                      <option value="agree">Agree</option>
+                      <option value="disagree">Disagree</option>
+                    </select>
+                  </label>
+                  {c.judgments[i]?.agreement === 'disagree' && (
+                    <label className="field">
+                      <span>What should change?</span>
+                      <input
+                        maxLength={240}
+                        value={c.judgments[i]?.correction || ''}
+                        onChange={(e) =>
+                          change(
+                            'judgments',
+                            c.judgments.map((x, j) =>
+                              j === i ? { ...x, correction: e.target.value } : x,
+                            ),
+                          )
+                        }
+                        placeholder="Correct judgment and reason"
+                      />
+                    </label>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+          <footer className="grading-footer">
+            <button className="secondary" onClick={() => setStep(1)}>
+              Back
+            </button>
+            <button className="primary" disabled={busy} onClick={() => save(3)}>
+              Save and continue <ArrowRight size={15} />
+            </button>
+          </footer>
+        </section>
+      )}
+      {step === 3 && (
+        <section className="panel grading-panel">
+          <div className="section-header">
+            <h2>4. Discovery brief</h2>
+          </div>
+          <div className="grading-body">
+            {c.snapshot && c.snapshot.revision !== c.revision && (
+              <p className="error">
+                The saved brief is out of date. Save completion again to update it.
+              </p>
+            )}
+            <p className="muted">
+              Check the evidence before saving. Completion records the expert’s feedback and a
+              follow-up where needed.
+            </p>
+            <div className="readiness">
+              <h3>{gaps.length ? 'Still needed' : 'Ready to save'}</h3>
+              {gaps.length ? (
+                gaps.map((x) => (
+                  <p key={x}>
+                    <AlertTriangle size={14} />
+                    <span>{x}</span>
+                    <button
+                      className="text-btn"
+                      onClick={() => setStep(/examples/.test(x) ? 1 : /judgments/.test(x) ? 2 : 0)}
+                    >
+                      Complete step
+                    </button>
+                  </p>
+                ))
+              ) : (
+                <p>
+                  <Check size={14} />
+                  Task, examples, and judgments are complete.
+                </p>
+              )}
+            </div>
+            <dl className="grading-summary">
+              <div>
+                <dt>Task</dt>
+                <dd>{c.task || 'Not defined'}</dd>
+              </div>
+              <div>
+                <dt>Desired outcome</dt>
+                <dd>{c.outcome || 'Not defined'}</dd>
+              </div>
+              <div>
+                <dt>Customer expert</dt>
+                <dd>{c.expertName || 'Unidentified'}</dd>
+              </div>
+              <div>
+                <dt>Expert examples</dt>
+                <dd>{c.examples.filter((x) => x.label).length} of 3 judged</dd>
+              </div>
+              <div>
+                <dt>Disagreements</dt>
+                <dd>{c.judgments.filter((x) => x.agreement === 'disagree').length} of 2</dd>
+              </div>
+              <div>
+                <dt>Needs follow-up</dt>
+                <dd>
+                  {[
+                    ...(!c.expertName ? ['Name an expert'] : []),
+                    ...(a.tasks.some(
+                      (t) =>
+                        !t.done &&
+                        ['grading:zdr-review', 'grading:data-restrictions'].includes(
+                          t.automationKey || '',
+                        ),
+                    )
+                      ? ['Data review']
+                      : []),
+                    ...(c.review?.status === 'open' ? ['Engineering review'] : []),
+                  ].join(' · ') || 'None recorded'}
+                </dd>
+              </div>
+              <div>
+                <dt>Next step</dt>
+                <dd>
+                  {c.review?.status === 'open'
+                    ? 'Assigned engineer reviews the disagreement'
+                    : 'Follow up with the named expert'}
+                </dd>
+              </div>
+            </dl>
+            <p className="muted">
+              This brief documents discovery. It does not qualify the account or change its
+              lifecycle stage.
+            </p>
+          </div>
+          <footer className="grading-footer">
+            <button className="secondary" onClick={() => setStep(2)}>
+              Back
+            </button>
+            <button
+              className="primary"
+              disabled={busy || !!gaps.length}
+              onClick={async () => {
+                if (await save(3, true))
+                  setSaved('Discovery brief saved to the shared account record.');
+              }}
+            >
+              Save discovery brief <Check size={15} />
+            </button>
+          </footer>
+        </section>
+      )}
+      {step === 4 && (
+        <section className="panel grading-panel">
+          <div className="section-header">
+            <h2>5. Engineering review</h2>
+            <span className="caption">
+              Assigned to {person(a.grading.review?.reviewerId || a.technicalOwnerId || a.ownerId)}
+            </span>
+          </div>
+          <div className="grading-body">
+            {a.grading.review?.status === 'open' && (
+              <div className="review-evidence">
+                <h3>Disagreements to resolve</h3>
+                {c.judgments
+                  .filter((j) => j.agreement === 'disagree')
+                  .map((j) => (
+                    <div key={j.id}>
+                      <strong>{graderJudgments.find((g) => g.id === j.id)?.criterion}</strong>
+                      <p>{j.correction}</p>
+                    </div>
+                  ))}
+              </div>
+            )}
+            {a.grading.review?.status === 'open' ? (
+              <ReviewForm
+                actor={actor}
+                reviewerId={a.grading.review.reviewerId}
+                reviewerName={person(a.grading.review.reviewerId)}
+                busy={busy}
+                onResolve={resolve}
+              />
+            ) : (
+              <div className="readiness">
+                <h3>
+                  {a.grading.review?.status === 'resolved'
+                    ? 'Review resolved'
+                    : 'No review assigned'}
+                </h3>
+                <p>
+                  {a.grading.review?.decision ||
+                    'A disagreement after completing the brief assigns an engineering review.'}{' '}
+                  {a.grading.review?.note}
+                </p>
+              </div>
+            )}
+            <a
+              className="grading-back"
+              href={'/?account=' + encodeURIComponent(a.id) + '&tab=scope'}
+            >
+              Open data and scope review
+            </a>
+            <p className="subtle-note">
+              <ShieldCheck size={15} />
+              Only the assigned reviewer can record a decision. Updated evidence reopens a resolved
+              review.
+            </p>
+          </div>
+          <footer className="grading-footer">
+            <button className="secondary" onClick={() => setStep(3)}>
+              Back to brief
+            </button>
+            <button className="secondary" disabled={dirty || busy} onClick={() => load()}>
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          </footer>
+        </section>
+      )}
+      <p className="grading-privacy">Teammate selection is a demo identity, not authentication.</p>
+      <a className="grading-back" href="/">
+        Return to workspace
+      </a>
+    </main>
+  );
 }
-function ReviewForm({actor,reviewerId,reviewerName,busy,onResolve}:{actor:string;reviewerId:string;reviewerName:string;busy:boolean;onResolve:(d:string,n:string)=>void}){const [decision,setDecision]=useState('accepted'),[note,setNote]=useState('');const assigned=actor===reviewerId;return <div>{!assigned&&<div className="grading-review-banner">Assigned to {reviewerName}. Switch the demo teammate selector above to continue.</div>}<label className="field"><span>Decision</span><select value={decision} disabled={!assigned||busy} onChange={e=>setDecision(e.target.value)}><option value="accepted">Accepted</option><option value="changes-required">Changes required</option></select></label><label className="field"><span>Reviewer note</span><textarea maxLength={4000} value={note} disabled={!assigned||busy} onChange={e=>setNote(e.target.value)} placeholder="Explain the review decision"/></label><button className="primary" disabled={!note.trim()||!assigned||busy} onClick={()=>onResolve(decision,note)}>Save reviewer decision</button></div>}
+function ReviewForm({
+  actor,
+  reviewerId,
+  reviewerName,
+  busy,
+  onResolve,
+}: {
+  actor: string;
+  reviewerId: string;
+  reviewerName: string;
+  busy: boolean;
+  onResolve: (d: string, n: string) => void;
+}) {
+  const [decision, setDecision] = useState('accepted'),
+    [note, setNote] = useState('');
+  const assigned = actor === reviewerId;
+  return (
+    <div>
+      {!assigned && (
+        <div className="grading-review-banner">
+          Assigned to {reviewerName}. Switch the demo teammate selector above to continue.
+        </div>
+      )}
+      <label className="field">
+        <span>Decision</span>
+        <select
+          value={decision}
+          disabled={!assigned || busy}
+          onChange={(e) => setDecision(e.target.value)}
+        >
+          <option value="accepted">Accepted</option>
+          <option value="changes-required">Changes required</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Reviewer note</span>
+        <textarea
+          maxLength={4000}
+          value={note}
+          disabled={!assigned || busy}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Explain the review decision"
+        />
+      </label>
+      <button
+        className="primary"
+        disabled={!note.trim() || !assigned || busy}
+        onClick={() => onResolve(decision, note)}
+      >
+        Save reviewer decision
+      </button>
+    </div>
+  );
+}

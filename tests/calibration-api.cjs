@@ -1,27 +1,213 @@
 // Exercise the real calibration route with an isolated in-memory D1 adapter.
-const assert=require('node:assert/strict'),Module=require('node:module'),path=require('node:path');
-const root=process.env.TEST_BUILD,rows=new Map();
-const DB={prepare(sql){return{bind(...args){return{async first(){const r=rows.get(args[0]);return r?{...r}:null},async run(){if(sql.startsWith('UPDATE')){const r=rows.get(args[2]);if(r?.version!==args[3])return{meta:{changes:0}};rows.set(args[2],{version:args[0],payload:args[1]});return{meta:{changes:1}}}throw Error(sql)}}}}}};
-const original=Module._load;Module._load=function(id,parent,isMain){if(id==='cloudflare:workers')return{env:{DB}};if(id.startsWith('@/'))id=path.join(root,id.slice(2)+'.js');return original.call(this,id,parent,isMain)};
-const {POST}=require(root+'/app/api/calibration/route.js');
-const {POST:mutate}=require(root+'/app/api/mutate/route.js');const {emptyAccount,todayLA}=require(root+'/lib/model.js');
-const account=emptyAccount('Calibration QA','maya',todayLA());account.id='calibration-test';account.industry='Support';account.technicalOwnerId='leo';rows.set(account.id,{version:1,payload:JSON.stringify(account)});
-let version=1,stored;
-async function call(action,extra={},actorId='maya',expected=200){const r=await POST(new Request('http://test/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accountId:account.id,version,actorId,action,...extra})}));const d=await r.json();assert.equal(r.status,expected,`${action}: ${JSON.stringify(d)}`);if(r.status===200){stored=d.account;version=stored.version;}return d;}
-function validCalibration(){return{task:'Grade support replies',outcome:'Resolve the issue safely',expertName:'Customer expert',dataRestrictions:'',dataPath:'synthetic',examples:[{id:'refund',label:'pass',reason:'Offers to check policy.'},{id:'security',label:'fail',reason:'Unsupported retention promise.'},{id:'escalation',label:'pass',reason:'Provides next steps.'}],judgments:[{id:'policy',agreement:'agree',correction:''},{id:'safety',agreement:'disagree',correction:'Escalate account takeover immediately.'}]};}
-(async()=>{
- let d=await call('save',{calibration:{task:'',outcome:'',expertName:'',dataRestrictions:'',dataPath:'synthetic',examples:[{id:'refund',label:'',reason:''},{id:'security',label:'',reason:''},{id:'escalation',label:'',reason:''}],judgments:[{id:'policy',agreement:'',correction:''},{id:'safety',agreement:'',correction:''}]}});assert.equal(d.account.grading.task,'');assert(d.account.tasks.some(t=>t.automationKey==='grading:expert'),'partial progress creates missing expert task');
- const completed=validCalibration();d=await call('save',{calibration:completed,complete:true});assert.equal(d.account.grading.snapshot.disagreementCount,1);assert.equal(d.account.grading.review.status,'open');assert.equal(d.account.tasks.filter(t=>t.automationKey==='grading:discovery-followup').length,1);assert.equal(d.account.tasks.find(t=>t.automationKey==='grading:discovery-followup').type,'action');
- await call('resolve-review',{decision:'accepted',note:'Correction is appropriate.'},'maya',400);
- d=await call('resolve-review',{decision:'accepted',note:'Correction is appropriate.'},'leo');assert.equal(d.account.grading.review.status,'resolved');assert.equal(d.account.grading.review.note,'Correction is appropriate.');
- d=await call('save',{calibration:d.account.grading,complete:true});assert.equal(d.account.grading.review.status,'resolved','unchanged completion save preserves resolved review');assert.equal(d.account.grading.review.note,'Correction is appropriate.');
- const priorRevision=d.account.grading.revision;const changed=structuredClone(d.account.grading);changed.examples[0].reason='Changed supporting rationale.';
- d=await call('save',{calibration:changed,complete:true});assert.equal(d.account.grading.revision,priorRevision+1);assert.equal(d.account.grading.review.status,'open','changed evidence reopens review');assert.equal(d.account.grading.review.note,'Correction is appropriate.','reopen preserves prior reviewer note');
- const duplicate=structuredClone(d.account.grading);duplicate.examples[1].id='refund';await call('save',{calibration:duplicate},'maya',400);
- const nullEntry=structuredClone(d.account.grading);nullEntry.judgments[0]=null;await call('save',{calibration:nullEntry},'maya',400);
- await call('request-zdr');await call('request-zdr');assert.equal(stored.tasks.filter(t=>t.automationKey==='grading:zdr-review').length,1,'ZDR requests deduplicate');
- async function mutateCall(action,data,actorId='leo'){const r=await mutate(new Request('http://test/api/mutate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data,accountId:account.id,version:version,actorId})}));const result=await r.json();assert.equal(r.status,200,JSON.stringify(result));stored=result.account;version=stored.version;}
- await call('save',{calibration:{...stored.grading,dataRestrictions:'No external processing',examples:stored.grading.examples,judgments:stored.grading.judgments}});await call('request-zdr');assert(stored.tasks.some(t=>t.automationKey==='grading:data-restrictions'&&!t.done));
- await mutateCall('saveProposal',{retention:'none',externalProcessing:false,trainingUse:false});await mutateCall('saveRestrictions',{status:'specified',wording:'No external processing',externalAllowed:'yes',trainingAllowed:'yes',retention:'none'});await mutateCall('decideReview',{status:'approved',note:'Reviewed current grading data requirements'});assert(stored.tasks.find(t=>t.automationKey==='grading:data-restrictions').done,'approved current data review closes restriction task');assert(stored.tasks.find(t=>t.automationKey==='grading:zdr-review').done,'approved current data review closes ZDR task');
- console.log('Calibration API checks passed: partial save, completion, reviewer ownership, review persistence/reopen, malformed/duplicate entry rejection, ZDR deduplication.');
-})().catch(e=>{console.error(e);process.exit(1)});
+const assert = require('node:assert/strict'),
+  Module = require('node:module'),
+  path = require('node:path');
+const root = process.env.TEST_BUILD,
+  rows = new Map();
+const DB = {
+  prepare(sql) {
+    return {
+      bind(...args) {
+        return {
+          async first() {
+            const r = rows.get(args[0]);
+            return r ? { ...r } : null;
+          },
+          async run() {
+            if (sql.startsWith('UPDATE')) {
+              const r = rows.get(args[2]);
+              if (r?.version !== args[3]) return { meta: { changes: 0 } };
+              rows.set(args[2], { version: args[0], payload: args[1] });
+              return { meta: { changes: 1 } };
+            }
+            throw Error(sql);
+          },
+        };
+      },
+    };
+  },
+};
+const original = Module._load;
+Module._load = function (id, parent, isMain) {
+  if (id === 'cloudflare:workers') return { env: { DB } };
+  if (id.startsWith('@/')) id = path.join(root, id.slice(2) + '.js');
+  return original.call(this, id, parent, isMain);
+};
+const { POST } = require(root + '/app/api/calibration/route.js');
+const { POST: mutate } = require(root + '/app/api/mutate/route.js');
+const { emptyAccount, todayLA } = require(root + '/lib/model.js');
+const account = emptyAccount('Calibration QA', 'maya', todayLA());
+account.id = 'calibration-test';
+account.industry = 'Support';
+account.technicalOwnerId = 'leo';
+rows.set(account.id, { version: 1, payload: JSON.stringify(account) });
+let version = 1,
+  stored;
+async function call(action, extra = {}, actorId = 'maya', expected = 200) {
+  const r = await POST(
+    new Request('http://test/api/calibration', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: account.id, version, actorId, action, ...extra }),
+    }),
+  );
+  const d = await r.json();
+  assert.equal(r.status, expected, `${action}: ${JSON.stringify(d)}`);
+  if (r.status === 200) {
+    stored = d.account;
+    version = stored.version;
+  }
+  return d;
+}
+function validCalibration() {
+  return {
+    task: 'Grade support replies',
+    outcome: 'Resolve the issue safely',
+    expertName: 'Customer expert',
+    dataRestrictions: '',
+    dataPath: 'synthetic',
+    examples: [
+      { id: 'refund', label: 'pass', reason: 'Offers to check policy.' },
+      { id: 'security', label: 'fail', reason: 'Unsupported retention promise.' },
+      { id: 'escalation', label: 'pass', reason: 'Provides next steps.' },
+    ],
+    judgments: [
+      { id: 'policy', agreement: 'agree', correction: '' },
+      { id: 'safety', agreement: 'disagree', correction: 'Escalate account takeover immediately.' },
+    ],
+  };
+}
+(async () => {
+  let d = await call('save', {
+    calibration: {
+      task: '',
+      outcome: '',
+      expertName: '',
+      dataRestrictions: '',
+      dataPath: 'synthetic',
+      examples: [
+        { id: 'refund', label: '', reason: '' },
+        { id: 'security', label: '', reason: '' },
+        { id: 'escalation', label: '', reason: '' },
+      ],
+      judgments: [
+        { id: 'policy', agreement: '', correction: '' },
+        { id: 'safety', agreement: '', correction: '' },
+      ],
+    },
+  });
+  assert.equal(d.account.grading.task, '');
+  assert(
+    d.account.tasks.some((t) => t.automationKey === 'grading:expert'),
+    'partial progress creates missing expert task',
+  );
+  const completed = validCalibration();
+  d = await call('save', { calibration: completed, complete: true });
+  assert.equal(d.account.grading.snapshot.disagreementCount, 1);
+  assert.equal(d.account.grading.review.status, 'open');
+  assert.equal(
+    d.account.tasks.filter((t) => t.automationKey === 'grading:discovery-followup').length,
+    1,
+  );
+  assert.equal(
+    d.account.tasks.find((t) => t.automationKey === 'grading:discovery-followup').type,
+    'action',
+  );
+  await call(
+    'resolve-review',
+    { decision: 'accepted', note: 'Correction is appropriate.' },
+    'maya',
+    400,
+  );
+  d = await call(
+    'resolve-review',
+    { decision: 'accepted', note: 'Correction is appropriate.' },
+    'leo',
+  );
+  assert.equal(d.account.grading.review.status, 'resolved');
+  assert.equal(d.account.grading.review.note, 'Correction is appropriate.');
+  d = await call('save', { calibration: d.account.grading, complete: true });
+  assert.equal(
+    d.account.grading.review.status,
+    'resolved',
+    'unchanged completion save preserves resolved review',
+  );
+  assert.equal(d.account.grading.review.note, 'Correction is appropriate.');
+  const priorRevision = d.account.grading.revision;
+  const changed = structuredClone(d.account.grading);
+  changed.examples[0].reason = 'Changed supporting rationale.';
+  d = await call('save', { calibration: changed, complete: true });
+  assert.equal(d.account.grading.revision, priorRevision + 1);
+  assert.equal(d.account.grading.review.status, 'open', 'changed evidence reopens review');
+  assert.equal(
+    d.account.grading.review.note,
+    'Correction is appropriate.',
+    'reopen preserves prior reviewer note',
+  );
+  const duplicate = structuredClone(d.account.grading);
+  duplicate.examples[1].id = 'refund';
+  await call('save', { calibration: duplicate }, 'maya', 400);
+  const nullEntry = structuredClone(d.account.grading);
+  nullEntry.judgments[0] = null;
+  await call('save', { calibration: nullEntry }, 'maya', 400);
+  await call('request-zdr');
+  await call('request-zdr');
+  assert.equal(
+    stored.tasks.filter((t) => t.automationKey === 'grading:zdr-review').length,
+    1,
+    'ZDR requests deduplicate',
+  );
+  async function mutateCall(action, data, actorId = 'leo') {
+    const r = await mutate(
+      new Request('http://test/api/mutate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, data, accountId: account.id, version: version, actorId }),
+      }),
+    );
+    const result = await r.json();
+    assert.equal(r.status, 200, JSON.stringify(result));
+    stored = result.account;
+    version = stored.version;
+  }
+  await call('save', {
+    calibration: {
+      ...stored.grading,
+      dataRestrictions: 'No external processing',
+      examples: stored.grading.examples,
+      judgments: stored.grading.judgments,
+    },
+  });
+  await call('request-zdr');
+  assert(stored.tasks.some((t) => t.automationKey === 'grading:data-restrictions' && !t.done));
+  await mutateCall('saveProposal', {
+    retention: 'none',
+    externalProcessing: false,
+    trainingUse: false,
+  });
+  await mutateCall('saveRestrictions', {
+    status: 'specified',
+    wording: 'No external processing',
+    externalAllowed: 'yes',
+    trainingAllowed: 'yes',
+    retention: 'none',
+  });
+  await mutateCall('decideReview', {
+    status: 'approved',
+    note: 'Reviewed current grading data requirements',
+  });
+  assert(
+    stored.tasks.find((t) => t.automationKey === 'grading:data-restrictions').done,
+    'approved current data review closes restriction task',
+  );
+  assert(
+    stored.tasks.find((t) => t.automationKey === 'grading:zdr-review').done,
+    'approved current data review closes ZDR task',
+  );
+  console.log(
+    'Calibration API checks passed: partial save, completion, reviewer ownership, review persistence/reopen, malformed/duplicate entry rejection, ZDR deduplication.',
+  );
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
