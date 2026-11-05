@@ -8,6 +8,13 @@
       "when": 1793856015636,
       "tag": "0000_freezing_tinkerer",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793873422837,
+      "tag": "0001_fine_karnak",
+      "breakpoints": true
     }
   ]
 }

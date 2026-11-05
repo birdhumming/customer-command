@@ -16,7 +16,7 @@ The deployment is public: anyone with the link can use and edit shared demo data
 4. Harbor: open Delivery & success. The accepted scope and technical owner are carried into the handoff. Switch to Leo and accept delivery. A dated milestone already exists. Unresolved access work stays visible as a blocker.
 5. Meridian: inspect overdue commitments, the delivery blocker, measured results below the accepted target, and approaching renewal. Mutations automatically reconcile assigned risk-review actions.
 6. Cedar: inspect a healthy customer and expansion follow-up.
-7. Open Grading readiness on an account to run the simulated calibration exercise. Use the three fixed synthetic examples, review the two fixed simulated grader judgments, and complete a preliminary discovery brief. Switch the demo teammate to the assigned technical owner to resolve a disagreement with a note. Reopen the exercise and edit evidence to see a resolved review reopen. Repeated ZDR review requests reuse one task.
+7. Open Continual grading on a presales account to run the simulated calibration exercise. Use the three fixed synthetic examples, review the two fixed simulated grader judgments, and complete a preliminary discovery brief. Switch the demo teammate to the assigned technical owner to resolve a disagreement with a note. Reopen the exercise and edit evidence to see a resolved review reopen. Repeated ZDR review requests reuse one task.
 8. Add an account, log a meeting with a dated follow-up, then open another tab/browser and refresh to see the shared record.
 
 ## Architecture
@@ -27,7 +27,7 @@ This repository contains the full-stack Cloudflare/Vinext source. The current Ve
 - Cloudflare D1 (SQLite) durable shared storage; not browser localStorage.
 - Each account is a versioned document in its own database row. Compare-and-swap updates prevent stale clients from silently overwriting changes. Meeting-plus-action and agreement-plus-handoff are atomic record mutations.
 - One pure rules module powers frontend readiness and server checks. Calibration is an optional, backward-compatible field on the same versioned account document; progress and reviews persist in D1. Immutable accepted agreement snapshots remain distinct from draft proposals.
-- Migrations are schema-only. Fixed-ID fictional accounts seed once using INSERT OR IGNORE. Refreshes do not reset records.
+- Migrations are schema-only. An explicitly versioned, one-time demo reset backs up all prior account rows atomically before restoring five fictional scenarios. Its durable marker prevents refreshes from resetting subsequent edits. New seed versions invalidate stale clients.
 - Signals are calculated from current data/date. Mutation-triggered risk tasks are deduplicated and close when the underlying issue resolves. There is no scheduler; time-triggered alerts are current on read, and persistent task reconciliation occurs on the next account mutation.
 
 ## Source map
@@ -60,7 +60,7 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 pnpm dev
 ```
 
-Only apply a local migration once. Hosted deployment applies migrations separately. Hosted and local databases are independent.
+Apply each file in drizzle/*.sql once, in filename order (including the demo-reset backup tables). Hosted deployment applies migrations separately. Hosted and local databases are independent.
 
 ## Validation performed
 
@@ -83,3 +83,13 @@ The production-oriented spec was intentionally reduced: no amendment acceptance 
 ## Grading browser verification
 
 Verified against the public deployment in Chrome: save context, grade three samples, repeat ZDR request without duplicate tasks, save one disagreement and completion brief, reload persisted state, reject the wrong reviewer, accept as assigned engineer, and reopen review / mark brief stale after changing evidence. Shared account card retained Discovery stage and showed assigned follow-ups.
+
+## Review hardening (November 2026)
+
+Forms preserve drafts on version conflicts, backdrop clicks do not dismiss them, and closing a dirty form requires confirmation. Navigation records account/tab URLs and supports browser history. Manual actions can be completed and reopened; generated review work remains tied to its workflow.
+
+API handlers bound request size and text lengths, validate real calendar dates and numeric targets, and require a distinct Engineering teammate for technical approval. Closed accounts are read-only until explicitly reopened; closing cancels unfinished work and reopening restores it. The acting teammate remains a demo identity, not authenticated authorization.
+
+Review and measurement histories preserve prior entries. Customer agreement evidence is required to record a win, and accepted terms, targets, restrictions and evidence are shown during handoff.
+
+The one-time cleanup retains the previous dataset in `demo_reset_account_backups`, keyed by reset revision. It is not exposed through the public state API. No recurring reset or public reset endpoint is installed.
